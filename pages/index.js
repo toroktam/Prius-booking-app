@@ -1,6 +1,7 @@
-// pages/index.js
-
 import { useEffect, useState } from 'react';
+import { GoogleSpreadsheet } from 'google-spreadsheet';
+import { addDays, format, startOfWeek } from 'date-fns';
+import hu from 'date-fns/locale/hu';
 
 const TIME_SLOTS = [
   '08:00–09:40',
@@ -10,141 +11,173 @@ const TIME_SLOTS = [
   '20:00–21:40',
 ];
 
-const DAYS = ['Hétfő', 'Kedd', 'Szerda', 'Csütörtök', 'Péntek', 'Szombat', 'Vasárnap'];
+const SHEET_ID = '14OnABoY-pzyAW-oXGHBxLxYsCu9Q3JtNDmNIqb530gI';
+const ACCESS_PASSWORD = process.env.NEXT_PUBLIC_APP_PASSWORD;
+const CREDENTIALS = require('/mnt/data/sonic-glazing-468016-m0-9f4e9a676581.json');
 
-const PASSWORD = process.env.NEXT_PUBLIC_APP_PASSWORD;
-
-export default function Home() {
-  const [bookings, setBookings] = useState({});
+export default function FoglalasiNaptar() {
   const [user, setUser] = useState('');
   const [loggedIn, setLoggedIn] = useState(false);
-  const [accessGranted, setAccessGranted] = useState(false);
-  const [passwordInput, setPasswordInput] = useState('');
+  const [bookings, setBookings] = useState({});
+  const [access, setAccess] = useState(false);
+  const [password, setPassword] = useState('');
+  const [weekOffset, setWeekOffset] = useState(0);
 
-  const fetchBookings = async () => {
-    const res = await fetch('/api/lista');
-    const data = await res.json();
-    const map = {};
-    data.forEach(({ nap, idosav, foglalo }) => {
-      map[`${nap}-${idosav}`] = foglalo;
-    });
-    setBookings(map);
-  };
+  const weekDates = Array.from({ length: 7 }).map((_, i) => {
+    const base = addDays(startOfWeek(new Date(), { weekStartsOn: 1 }), i + weekOffset * 7);
+    return {
+      label: format(base, 'yyyy-MM-dd (EEEE)', { locale: hu }),
+      key: format(base, 'yyyy-MM-dd')
+    };
+  });
 
   useEffect(() => {
-    if (loggedIn && accessGranted) {
-      fetchBookings();
-    }
-  }, [loggedIn, accessGranted]);
+    const storedAccess = localStorage.getItem('access_granted');
+    if (storedAccess === 'true') setAccess(true);
+  }, []);
 
-  const handleSlotClick = async (nap, idosav) => {
-    const key = `${nap}-${idosav}`;
-    const foglalo = bookings[key];
-
-    if (foglalo && foglalo !== user) return;
-
-    if (foglalo === user) {
-      await fetch('/api/torol', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nap, idosav, foglalo: user }),
+  useEffect(() => {
+    const fetchBookings = async () => {
+      const doc = new GoogleSpreadsheet(SHEET_ID);
+      await doc.useServiceAccountAuth(CREDENTIALS);
+      await doc.loadInfo();
+      const sheet = doc.sheetsByIndex[0];
+      const rows = await sheet.getRows();
+      const newBookings = {};
+      rows.forEach(row => {
+        const key = `${row.Datum}-${row.Idosav}`;
+        newBookings[key] = row.Foglalo;
       });
+      setBookings(newBookings);
+    };
+    if (loggedIn && access) fetchBookings();
+  }, [loggedIn, access, weekOffset]);
+
+  const handlePasswordSubmit = (e) => {
+    e.preventDefault();
+    if (password === ACCESS_PASSWORD) {
+      setAccess(true);
+      localStorage.setItem('access_granted', 'true');
     } else {
-      await fetch('/api/foglal', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nap, idosav, foglalo: user }),
-      });
+      alert('Hibás jelszó');
     }
-
-    fetchBookings();
   };
 
-  if (!accessGranted) {
-    return (
-      <div className="p-4">
-        <input
-          type="password"
-          placeholder="Jelszó"
-          className="border p-2 mr-2"
-          value={passwordInput}
-          onChange={(e) => setPasswordInput(e.target.value)}
-        />
-        <button
-          className="bg-blue-600 text-white px-3 py-1 rounded"
-          onClick={() => {
-            if (passwordInput === PASSWORD) {
-              setAccessGranted(true);
-            } else {
-              alert('Hibás jelszó');
-            }
-          }}
-        >
-          Belépés
-        </button>
-      </div>
-    );
-  }
+  const handleLogin = (e) => {
+    e.preventDefault();
+    if (user.trim()) setLoggedIn(true);
+  };
 
-  if (!loggedIn) {
+  const handleBooking = async (date, slot) => {
+    const key = `${date}-${slot}`;
+    const current = bookings[key];
+    const doc = new GoogleSpreadsheet(SHEET_ID);
+    await doc.useServiceAccountAuth(CREDENTIALS);
+    await doc.loadInfo();
+    const sheet = doc.sheetsByIndex[0];
+
+    if (current === user) {
+      const rows = await sheet.getRows();
+      const match = rows.find(row => row.Datum === date && row.Idosav === slot && row.Foglalo === user);
+      if (match) {
+        await match.delete();
+        const updated = { ...bookings };
+        delete updated[key];
+        setBookings(updated);
+      }
+    } else if (!current) {
+      await sheet.addRow({ Datum: date, Idosav: slot, Foglalo: user, Idobelyeg: new Date().toISOString() });
+      setBookings({ ...bookings, [key]: user });
+    }
+  };
+
+  if (!access) {
     return (
       <div className="p-4">
-        <input
-          type="text"
-          placeholder="Név (pl. Tamás vagy Krisztián)"
-          className="border p-2 mr-2"
-          value={user}
-          onChange={(e) => setUser(e.target.value)}
-        />
-        <button
-          className="bg-green-600 text-white px-3 py-1 rounded"
-          onClick={() => {
-            if (user.trim()) setLoggedIn(true);
-          }}
-        >
-          Tovább
-        </button>
+        <form onSubmit={handlePasswordSubmit} className="space-x-2">
+          <input
+            type="password"
+            placeholder="Jelszó belépéshez"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="border px-2 py-1"
+          />
+          <button type="submit" className="bg-blue-500 text-white px-3 py-1 rounded">
+            Belépés
+          </button>
+        </form>
       </div>
     );
   }
 
   return (
     <div className="p-4">
-      <h2 className="text-xl font-bold mb-4">Üdv, {user}!</h2>
-      <div className="grid grid-cols-8 gap-1">
-        <div className="font-bold">Idősáv</div>
-        {DAYS.map((nap) => (
-          <div key={nap} className="font-bold text-center">
-            {nap}
+      {!loggedIn ? (
+        <form onSubmit={handleLogin} className="space-x-2">
+          <input
+            type="text"
+            placeholder="Név (pl. Tamás vagy Krisztián)"
+            value={user}
+            onChange={(e) => setUser(e.target.value)}
+            className="border px-2 py-1"
+          />
+          <button type="submit" className="bg-blue-500 text-white px-3 py-1 rounded">
+            Belépés
+          </button>
+        </form>
+      ) : (
+        <>
+          <h2 className="text-xl mb-4">Üdv, {user}!</h2>
+          <div className="flex justify-between mb-2">
+            <button
+              onClick={() => setWeekOffset(weekOffset - 1)}
+              className="bg-gray-300 px-3 py-1 rounded"
+            >
+              ◀ Előző hét
+            </button>
+            <button
+              onClick={() => setWeekOffset(weekOffset + 1)}
+              className="bg-gray-300 px-3 py-1 rounded"
+            >
+              Következő hét ▶
+            </button>
           </div>
-        ))}
-        {TIME_SLOTS.map((idosav) => (
-          <>
-            <div className="font-semibold">{idosav}</div>
-            {DAYS.map((nap) => {
-              const key = `${nap}-${idosav}`;
-              const foglalo = bookings[key];
-              const isMine = foglalo === user;
-              return (
-                <button
-                  key={key}
-                  onClick={() => handleSlotClick(nap, idosav)}
-                  disabled={foglalo && !isMine}
-                  className={`h-12 w-full border text-sm rounded ${
-                    foglalo
-                      ? isMine
-                        ? 'bg-green-300 hover:bg-yellow-200'
-                        : 'bg-red-400 text-white cursor-not-allowed'
-                      : 'bg-white hover:bg-blue-100'
-                  }`}
-                >
-                  {foglalo || 'Szabad'}
-                </button>
-              );
-            })}
-          </>
-        ))}
-      </div>
+          <div className="grid grid-cols-8 gap-1">
+            <div className="font-bold">Idősáv</div>
+            {weekDates.map((d) => (
+              <div key={d.key} className="font-bold text-xs text-center">
+                {d.label}
+              </div>
+            ))}
+            {TIME_SLOTS.map((slot) => (
+              <>
+                <div className="font-semibold text-sm">{slot}</div>
+                {weekDates.map((d) => {
+                  const key = `${d.key}-${slot}`;
+                  const reservedBy = bookings[key];
+                  const isMine = reservedBy === user;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => handleBooking(d.key, slot)}
+                      className={`h-12 w-full border text-xs rounded px-1 overflow-hidden ${
+                        reservedBy
+                          ? isMine
+                            ? 'bg-green-300 hover:bg-yellow-200'
+                            : 'bg-red-400 text-white cursor-not-allowed'
+                          : 'bg-white hover:bg-blue-100'
+                      }`}
+                      disabled={reservedBy && !isMine}
+                    >
+                      {reservedBy || 'Szabad'}
+                    </button>
+                  );
+                })}
+              </>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
