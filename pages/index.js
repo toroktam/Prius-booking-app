@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { GoogleSpreadsheet } from 'google-spreadsheet';
-import { addDays, format, startOfWeek } from 'date-fns';
-import hu from 'date-fns/locale/hu';
+import { format, addDays, startOfWeek } from 'date-fns';
+import { hu } from 'date-fns/locale';
 
 const TIME_SLOTS = [
   '08:00–09:40',
@@ -12,8 +12,10 @@ const TIME_SLOTS = [
 ];
 
 const SHEET_ID = '14OnABoY-pzyAW-oXGHBxLxYsCu9Q3JtNDmNIqb530gI';
-const ACCESS_PASSWORD = process.env.NEXT_PUBLIC_APP_PASSWORD;
-const CREDENTIALS = require('/mnt/data/sonic-glazing-468016-m0-9f4e9a676581.json');
+const ACCESS_PASSWORD = 'tanulas123';
+
+// Google kulcs beolvasása environment változóból
+const CREDENTIALS = JSON.parse(process.env.NEXT_PUBLIC_GOOGLE_SERVICE_ACCOUNT);
 
 export default function FoglalasiNaptar() {
   const [user, setUser] = useState('');
@@ -21,37 +23,32 @@ export default function FoglalasiNaptar() {
   const [bookings, setBookings] = useState({});
   const [access, setAccess] = useState(false);
   const [password, setPassword] = useState('');
-  const [weekOffset, setWeekOffset] = useState(0);
-
-  const weekDates = Array.from({ length: 7 }).map((_, i) => {
-    const base = addDays(startOfWeek(new Date(), { weekStartsOn: 1 }), i + weekOffset * 7);
-    return {
-      label: format(base, 'yyyy-MM-dd (EEEE)', { locale: hu }),
-      key: format(base, 'yyyy-MM-dd')
-    };
-  });
+  const [weekStart, setWeekStart] = useState(startOfWeek(new Date(), { weekStartsOn: 1 }));
 
   useEffect(() => {
     const storedAccess = localStorage.getItem('access_granted');
-    if (storedAccess === 'true') setAccess(true);
+    if (storedAccess === 'true') {
+      setAccess(true);
+    }
   }, []);
 
   useEffect(() => {
-    const fetchBookings = async () => {
-      const doc = new GoogleSpreadsheet(SHEET_ID);
-      await doc.useServiceAccountAuth(CREDENTIALS);
-      await doc.loadInfo();
-      const sheet = doc.sheetsByIndex[0];
-      const rows = await sheet.getRows();
-      const newBookings = {};
-      rows.forEach(row => {
-        const key = `${row.Datum}-${row.Idosav}`;
-        newBookings[key] = row.Foglalo;
-      });
-      setBookings(newBookings);
-    };
     if (loggedIn && access) fetchBookings();
-  }, [loggedIn, access, weekOffset]);
+  }, [loggedIn, access, weekStart]);
+
+  const fetchBookings = async () => {
+    const doc = new GoogleSpreadsheet(SHEET_ID);
+    await doc.useServiceAccountAuth(CREDENTIALS);
+    await doc.loadInfo();
+    const sheet = doc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+    const newBookings = {};
+    rows.forEach(row => {
+      const key = `${row.Datum}-${row.Idosav}`;
+      newBookings[key] = row.Foglalo;
+    });
+    setBookings(newBookings);
+  };
 
   const handlePasswordSubmit = (e) => {
     e.preventDefault();
@@ -91,6 +88,11 @@ export default function FoglalasiNaptar() {
     }
   };
 
+  const daysOfWeek = Array.from({ length: 7 }).map((_, i) => {
+    const date = addDays(weekStart, i);
+    return { label: format(date, 'EEE dd.MM.', { locale: hu }), value: format(date, 'yyyy-MM-dd') };
+  });
+
   if (!access) {
     return (
       <div className="p-4">
@@ -128,39 +130,39 @@ export default function FoglalasiNaptar() {
       ) : (
         <>
           <h2 className="text-xl mb-4">Üdv, {user}!</h2>
-          <div className="flex justify-between mb-2">
+          <div className="flex justify-between mb-4">
             <button
-              onClick={() => setWeekOffset(weekOffset - 1)}
+              onClick={() => setWeekStart(addDays(weekStart, -7))}
               className="bg-gray-300 px-3 py-1 rounded"
             >
-              ◀ Előző hét
+              Előző hét
             </button>
             <button
-              onClick={() => setWeekOffset(weekOffset + 1)}
+              onClick={() => setWeekStart(addDays(weekStart, 7))}
               className="bg-gray-300 px-3 py-1 rounded"
             >
-              Következő hét ▶
+              Következő hét
             </button>
           </div>
           <div className="grid grid-cols-8 gap-1">
             <div className="font-bold">Idősáv</div>
-            {weekDates.map((d) => (
-              <div key={d.key} className="font-bold text-xs text-center">
-                {d.label}
+            {daysOfWeek.map((day) => (
+              <div key={day.value} className="font-bold text-center">
+                {day.label}
               </div>
             ))}
             {TIME_SLOTS.map((slot) => (
               <>
-                <div className="font-semibold text-sm">{slot}</div>
-                {weekDates.map((d) => {
-                  const key = `${d.key}-${slot}`;
+                <div className="font-semibold">{slot}</div>
+                {daysOfWeek.map((day) => {
+                  const key = `${day.value}-${slot}`;
                   const reservedBy = bookings[key];
                   const isMine = reservedBy === user;
                   return (
                     <button
                       key={key}
-                      onClick={() => handleBooking(d.key, slot)}
-                      className={`h-12 w-full border text-xs rounded px-1 overflow-hidden ${
+                      onClick={() => handleBooking(day.value, slot)}
+                      className={`h-12 w-full border text-sm rounded ${
                         reservedBy
                           ? isMine
                             ? 'bg-green-300 hover:bg-yellow-200'
