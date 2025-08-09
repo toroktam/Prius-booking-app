@@ -1,9 +1,14 @@
-import { useEffect, useState } from 'react';
-import { format, addDays, startOfWeek } from 'date-fns';
-import { hu } from 'date-fns/locale';
-import axios from 'axios';
+import { useState, useEffect } from "react";
+import { GoogleSpreadsheet } from "google-spreadsheet";
+import { format, addWeeks, startOfWeek, addDays } from "date-fns";
+import { hu } from "date-fns/locale";
 
-const timeSlots = [
+const SPREADSHEET_ID = process.env.NEXT_PUBLIC_SPREADSHEET_ID;
+const SHEET_ID = process.env.NEXT_PUBLIC_SHEET_ID;
+const CLIENT_EMAIL = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_EMAIL;
+const PRIVATE_KEY = process.env.NEXT_PUBLIC_GOOGLE_SERVICE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+
+const TIME_SLOTS = [
   "08:00–09:40",
   "10:00–11:40",
   "13:00–14:40",
@@ -12,122 +17,161 @@ const timeSlots = [
 ];
 
 export default function Home() {
-  const [currentWeekStart, setCurrentWeekStart] = useState(startOfWeek(new Date(), { weekStartsOn: 1 }));
-  const [bookings, setBookings] = useState({});
-  const [name, setName] = useState('');
-  const [loggedIn, setLoggedIn] = useState(false);
+  const [currentWeek, setCurrentWeek] = useState(startOfWeek(new Date(), { weekStartsOn: 1 }));
+  const [bookings, setBookings] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [name, setName] = useState("");
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   useEffect(() => {
-    const savedName = localStorage.getItem('bookingName');
-    if (savedName) {
-      setName(savedName);
-      setLoggedIn(true);
+    const storedName = localStorage.getItem("username");
+    if (storedName) {
+      setName(storedName);
+      setIsLoggedIn(true);
     }
   }, []);
 
-  const fetchBookings = async () => {
-    const res = await axios.get(`/api/getBookings?week=${format(currentWeekStart, 'yyyy-MM-dd')}`);
-    setBookings(res.data);
-  };
-
   useEffect(() => {
-    fetchBookings();
-  }, [currentWeekStart]);
+    if (isLoggedIn) fetchBookings();
+  }, [currentWeek, isLoggedIn]);
+
+  const fetchBookings = async () => {
+    setLoading(true);
+    try {
+      const doc = new GoogleSpreadsheet(SPREADSHEET_ID);
+      await doc.useServiceAccountAuth({
+        client_email: CLIENT_EMAIL,
+        private_key: PRIVATE_KEY
+      });
+      await doc.loadInfo();
+      const sheet = doc.sheetsById[SHEET_ID];
+      const rows = await sheet.getRows();
+      setBookings(rows);
+    } catch (error) {
+      console.error("Hiba a foglalások betöltésekor:", error);
+    }
+    setLoading(false);
+  };
 
   const handleBooking = async (day, slot) => {
-    if (!loggedIn) return;
-    await axios.post('/api/bookSlot', {
-      date: format(addDays(currentWeekStart, day), 'yyyy-MM-dd'),
-      slot,
-      name
-    });
-    fetchBookings();
-  };
+    if (!name) return;
+    try {
+      const doc = new GoogleSpreadsheet(SPREADSHEET_ID);
+      await doc.useServiceAccountAuth({
+        client_email: CLIENT_EMAIL,
+        private_key: PRIVATE_KEY
+      });
+      await doc.loadInfo();
+      const sheet = doc.sheetsById[SHEET_ID];
+      const rows = await sheet.getRows();
 
-  const login = () => {
-    if (name.trim() !== '') {
-      localStorage.setItem('bookingName', name);
-      setLoggedIn(true);
+      const bookingDate = format(day, "yyyy-MM-dd") + " " + slot;
+      const existing = rows.find(r => r.DateTime === bookingDate);
+
+      if (existing) {
+        if (existing.Name === name) {
+          await existing.delete();
+        } else {
+          alert("Ez az időpont már foglalt!");
+          return;
+        }
+      } else {
+        await sheet.addRow({ DateTime: bookingDate, Name: name });
+      }
+      fetchBookings();
+    } catch (error) {
+      console.error("Hiba a foglalásnál:", error);
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem('bookingName');
-    setName('');
-    setLoggedIn(false);
+  const renderCalendar = () => {
+    const days = Array.from({ length: 7 }, (_, i) => addDays(currentWeek, i));
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+        <table border="1" style={{ borderCollapse: "collapse", textAlign: "center" }}>
+          <thead>
+            <tr>
+              <th>Időpont</th>
+              {days.map(day => (
+                <th key={day}>
+                  {format(day, "MM.dd", { locale: hu })} ({format(day, "EEEE", { locale: hu })})
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {TIME_SLOTS.map(slot => (
+              <tr key={slot}>
+                <td>{slot}</td>
+                {days.map(day => {
+                  const booking = bookings.find(
+                    b => b.DateTime === format(day, "yyyy-MM-dd") + " " + slot
+                  );
+                  return (
+                    <td
+                      key={day + slot}
+                      style={{
+                        cursor: "pointer",
+                        backgroundColor: booking
+                          ? booking.Name === name
+                            ? "lightgreen"
+                            : "lightcoral"
+                          : "white"
+                      }}
+                      onClick={() => handleBooking(day, slot)}
+                    >
+                      {booking ? booking.Name : ""}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{ marginTop: "10px" }}>
+          <button onClick={() => setCurrentWeek(addWeeks(currentWeek, -1))}>Előző hét</button>
+          <button onClick={() => setCurrentWeek(addWeeks(currentWeek, 1))}>Következő hét</button>
+        </div>
+      </div>
+    );
   };
 
-  return (
-    <div style={{ padding: '20px', fontFamily: 'Arial' }}>
-      {!loggedIn ? (
+  if (!isLoggedIn) {
+    return (
+      <div style={{
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        height: "100vh"
+      }}>
         <div>
-          <h2>Foglalási rendszer</h2>
+          <h2>Kérlek add meg a neved</h2>
           <input
-            type="text"
-            placeholder="Add meg a neved"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={e => setName(e.target.value)}
+            placeholder="Név"
           />
-          <button onClick={login}>Belépés</button>
+          <button onClick={() => {
+            if (name.trim()) {
+              localStorage.setItem("username", name.trim());
+              setIsLoggedIn(true);
+            }
+          }}>Belépés</button>
         </div>
-      ) : (
-        <>
-          <div style={{ marginBottom: '10px' }}>
-            <strong>Bejelentkezve mint:</strong> {name}{" "}
-            <button onClick={logout}>Kijelentkezés</button>
-          </div>
+      </div>
+    );
+  }
 
-          <div>
-            <button onClick={() => setCurrentWeekStart(addDays(currentWeekStart, -7))}>Előző hét</button>
-            <span style={{ margin: '0 10px' }}>
-              {format(currentWeekStart, 'yyyy.MM.dd', { locale: hu })} - {format(addDays(currentWeekStart, 6), 'yyyy.MM.dd', { locale: hu })}
-            </span>
-            <button onClick={() => setCurrentWeekStart(addDays(currentWeekStart, 7))}>Következő hét</button>
-          </div>
-
-          <table border="1" cellPadding="5" style={{ borderCollapse: 'collapse', marginTop: '20px', textAlign: 'center' }}>
-            <thead>
-              <tr>
-                <th>Időpont</th>
-                {[...Array(7)].map((_, i) => (
-                  <th key={i}>
-                    {format(addDays(currentWeekStart, i), 'MM.dd', { locale: hu })} <br />
-                    {format(addDays(currentWeekStart, i), 'EEEE', { locale: hu })}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {timeSlots.map((slot) => (
-                <tr key={slot}>
-                  <td>{slot}</td>
-                  {[...Array(7)].map((_, day) => {
-                    const date = format(addDays(currentWeekStart, day), 'yyyy-MM-dd');
-                    const bookedBy = bookings[date]?.[slot];
-                    const isMine = bookedBy === name;
-                    return (
-                      <td
-                        key={day}
-                        style={{
-                          backgroundColor: bookedBy ? (isMine ? '#90ee90' : '#f08080') : '#fff',
-                          cursor: 'pointer'
-                        }}
-                        onClick={() => {
-                          if (!bookedBy || isMine) {
-                            handleBooking(day, slot);
-                          }
-                        }}
-                      >
-                        {bookedBy || ''}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
+  return (
+    <div style={{
+      display: "flex",
+      justifyContent: "center",
+      alignItems: "center",
+      height: "100vh",
+      flexDirection: "column"
+    }}>
+      <h2>Heti foglalások</h2>
+      {loading ? <p>Betöltés...</p> : renderCalendar()}
     </div>
   );
 }
