@@ -1,5 +1,5 @@
+// pages/index.js
 import { useEffect, useState } from 'react';
-import { GoogleSpreadsheet } from 'google-spreadsheet';
 import { format, addDays, startOfWeek } from 'date-fns';
 import { hu } from 'date-fns/locale';
 
@@ -11,51 +11,74 @@ const TIME_SLOTS = [
   '20:00–21:40',
 ];
 
-const SHEET_ID = '14OnABoY-pzyAW-oXGHBxLxYsCu9Q3JtNDmNIqb530gI';
-const ACCESS_PASSWORD = 'tanulas123';
+const ACCESS_PASSWORD = process.env.NEXT_PUBLIC_APP_PASSWORD || 'tanulas123';
 
-export default function FoglalasiNaptar() {
+export default function Home() {
+  const [bookings, setBookings] = useState({});
   const [user, setUser] = useState('');
   const [loggedIn, setLoggedIn] = useState(false);
-  const [bookings, setBookings] = useState({});
   const [access, setAccess] = useState(false);
-  const [password, setPassword] = useState('');
-  const [currentWeekStart, setCurrentWeekStart] = useState(startOfWeek(new Date(), { weekStartsOn: 1 }));
+  const [pwdInput, setPwdInput] = useState('');
+  const [weekStart, setWeekStart] = useState(startOfWeek(new Date(), { weekStartsOn: 1 }));
 
-  const DAYS = Array.from({ length: 7 }, (_, i) =>
-    addDays(currentWeekStart, i)
-  );
+  const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
   useEffect(() => {
-    const storedAccess = localStorage.getItem('access_granted');
-    if (storedAccess === 'true') {
-      setAccess(true);
-    }
+    const stored = localStorage.getItem('access_granted');
+    if (stored === 'true') setAccess(true);
   }, []);
 
   useEffect(() => {
-    const fetchBookings = async () => {
-      const doc = new GoogleSpreadsheet(SHEET_ID);
-      await doc.useServiceAccountAuth({
-        client_email: process.env.NEXT_PUBLIC_GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-        private_key: (process.env.NEXT_PUBLIC_GOOGLE_PRIVATE_KEY || process.env.GOOGLE_PRIVATE_KEY).replace(/\\n/g, '\n'),
-      });
-      await doc.loadInfo();
-      const sheet = doc.sheetsByIndex[0];
-      const rows = await sheet.getRows();
-      const newBookings = {};
-      rows.forEach(row => {
-        const key = `${row.Nap}-${row.Idosav}`;
-        newBookings[key] = row.Foglalo;
-      });
-      setBookings(newBookings);
-    };
     if (loggedIn && access) fetchBookings();
-  }, [loggedIn, access, currentWeekStart]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loggedIn, access, weekStart]);
 
-  const handlePasswordSubmit = (e) => {
+  async function fetchBookings() {
+    const res = await fetch('/api/bookings');
+    if (!res.ok) { console.error('Fetch bookings failed'); return; }
+    const data = await res.json();
+    setBookings(data || {});
+  }
+
+  async function doBook(date, slot) {
+    const key = `${date}-${slot}`;
+    const reservedBy = bookings[key];
+
+    if (reservedBy === user) {
+      // törlés (saját foglalás)
+      const res = await fetch('/api/bookings', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date, slot, user })
+      });
+      if (res.ok) {
+        const copy = { ...bookings }; delete copy[key]; setBookings(copy);
+      } else {
+        alert('Törlés sikertelen');
+      }
+      return;
+    }
+
+    if (!reservedBy) {
+      const res = await fetch('/api/bookings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date, slot, user })
+      });
+      if (res.ok) {
+        setBookings({ ...bookings, [key]: user });
+      } else if (res.status === 409) {
+        alert('Már foglalták az időpontot');
+        fetchBookings();
+      } else {
+        alert('Foglalás sikertelen');
+      }
+    }
+  }
+
+  const handlePassword = (e) => {
     e.preventDefault();
-    if (password === ACCESS_PASSWORD) {
+    if (pwdInput === ACCESS_PASSWORD) {
       setAccess(true);
       localStorage.setItem('access_granted', 'true');
     } else {
@@ -63,124 +86,68 @@ export default function FoglalasiNaptar() {
     }
   };
 
-  const handleLogin = (e) => {
-    e.preventDefault();
-    if (user.trim()) setLoggedIn(true);
-  };
-
-  const handleBooking = async (day, slot) => {
-    const key = `${format(day, 'yyyy-MM-dd')}-${slot}`;
-    const current = bookings[key];
-    const doc = new GoogleSpreadsheet(SHEET_ID);
-    await doc.useServiceAccountAuth({
-      client_email: process.env.NEXT_PUBLIC_GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-      private_key: (process.env.NEXT_PUBLIC_GOOGLE_PRIVATE_KEY || process.env.GOOGLE_PRIVATE_KEY).replace(/\\n/g, '\n'),
-    });
-    await doc.loadInfo();
-    const sheet = doc.sheetsByIndex[0];
-
-    if (current === user) {
-      const rows = await sheet.getRows();
-      const match = rows.find(row => row.Nap === format(day, 'yyyy-MM-dd') && row.Idosav === slot && row.Foglalo === user);
-      if (match) {
-        await match.delete();
-        const updated = { ...bookings };
-        delete updated[key];
-        setBookings(updated);
-      }
-    } else if (!current) {
-      await sheet.addRow({
-        Nap: format(day, 'yyyy-MM-dd'),
-        Idosav: slot,
-        Foglalo: user,
-        Idobelyeg: new Date().toISOString()
-      });
-      setBookings({ ...bookings, [key]: user });
-    }
-  };
-
-  const goPrevWeek = () => {
-    setCurrentWeekStart(prev => addDays(prev, -7));
-  };
-
-  const goNextWeek = () => {
-    setCurrentWeekStart(prev => addDays(prev, 7));
-  };
-
-  if (!access) {
-    return (
-      <div className="p-4">
-        <form onSubmit={handlePasswordSubmit} className="space-x-2">
-          <input
-            type="password"
-            placeholder="Jelszó belépéshez"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="border px-2 py-1"
-          />
-          <button type="submit" className="bg-blue-500 text-white px-3 py-1 rounded">
-            Belépés
-          </button>
-        </form>
-      </div>
-    );
-  }
-
   return (
-    <div className="p-4">
-      {!loggedIn ? (
-        <form onSubmit={handleLogin} className="space-x-2">
-          <input
-            type="text"
-            placeholder="Név (pl. Tamás vagy Krisztián)"
-            value={user}
-            onChange={(e) => setUser(e.target.value)}
-            className="border px-2 py-1"
-          />
-          <button type="submit" className="bg-blue-500 text-white px-3 py-1 rounded">
-            Belépés
-          </button>
+    <div style={{ padding: 12, fontFamily: 'Arial, sans-serif' }}>
+      {!access ? (
+        <form onSubmit={handlePassword}>
+          <input type="password" placeholder="Jelszó" value={pwdInput} onChange={(e)=>setPwdInput(e.target.value)} style={{padding:8}}/>
+          <button type="submit" style={{marginLeft:8,padding:'8px 12px'}}>Belépés</button>
+        </form>
+      ) : !loggedIn ? (
+        <form onSubmit={(e)=>{ e.preventDefault(); if (user.trim()) setLoggedIn(true); }}>
+          <input value={user} onChange={(e)=>setUser(e.target.value)} placeholder="Név (Tamás vagy Krisztián)" style={{padding:8}} />
+          <button type="submit" style={{marginLeft:8,padding:'8px 12px'}}>Lépj be</button>
         </form>
       ) : (
         <>
-          <div className="flex justify-between mb-4">
-            <button onClick={goPrevWeek} className="bg-gray-300 px-2 py-1 rounded">Előző hét</button>
-            <h2 className="text-xl">Üdv, {user}!</h2>
-            <button onClick={goNextWeek} className="bg-gray-300 px-2 py-1 rounded">Következő hét</button>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+            <button onClick={()=>setWeekStart(addDays(weekStart,-7))}>◀ Előző hét</button>
+            <h2>Üdv, {user}!</h2>
+            <button onClick={()=>setWeekStart(addDays(weekStart,7))}>Következő hét ▶</button>
           </div>
-          <div className="grid grid-cols-8 gap-1">
-            <div className="font-bold">Idősáv</div>
-            {DAYS.map(day => (
-              <div key={day} className="font-bold text-center">
-                {format(day, 'MM.dd', { locale: hu })} <br /> {format(day, 'EEEE', { locale: hu })}
-              </div>
-            ))}
-            {TIME_SLOTS.map((slot) => (
-              <>
-                <div className="font-semibold">{slot}</div>
-                {DAYS.map(day => {
-                  const key = `${format(day, 'yyyy-MM-dd')}-${slot}`;
-                  const reservedBy = bookings[key];
-                  const isMine = reservedBy === user;
-                  return (
-                    <button
-                      key={key}
-                      onClick={() => handleBooking(day, slot)}
-                      className={`h-12 w-full border text-sm rounded ${
-                        reservedBy
-                          ? isMine
-                            ? 'bg-green-300 hover:bg-yellow-200'
-                            : 'bg-red-400 text-white cursor-not-allowed'
-                          : 'bg-white hover:bg-blue-100'
-                      }`}
-                      disabled={reservedBy && !isMine}
-                    >
-                      {reservedBy || 'Szabad'}
-                    </button>
-                  );
-                })}
-              </>
-            ))}
+
+          <div style={{overflowX:'auto'}}>
+            <div style={{
+              display:'grid',
+              gridTemplateColumns:'160px repeat(7,minmax(120px,1fr))',
+              gap:'8px',
+              alignItems:'start',
+              minWidth: '700px'
+            }}>
+              <div style={{fontWeight:700,padding:6,textAlign:'center',background:'#f5f5f5',borderRadius:6}}>Idősáv</div>
+              {days.map(d=>(
+                <div key={d.toISOString()} style={{fontWeight:700,textAlign:'center',padding:6,background:'#f5f5f5',borderRadius:6}}>
+                  {format(d,'MM.dd',{locale:hu})}<br/><small>{format(d,'EEEE',{locale:hu})}</small>
+                </div>
+              ))}
+
+              {TIME_SLOTS.map(slot=>(
+                <div key={slot} style={{display:'contents'}}>
+                  <div style={{padding:8,background:'#fafafa',fontWeight:600}}>{slot}</div>
+                  {days.map(d=>{
+                    const dateStr = format(d,'yyyy-MM-dd');
+                    const key = `${dateStr}-${slot}`;
+                    const reservedBy = bookings[key];
+                    const isMine = reservedBy === user;
+                    const style = reservedBy ? (isMine ? {background:'#ffd97d'} : {background:'#f36b6b',color:'white'}) : {background:'#dff7d8'};
+                    return (
+                      <button
+                        key={key}
+                        onClick={()=>doBook(dateStr,slot)}
+                        disabled={!!reservedBy && !isMine}
+                        style={{
+                          width:'100%',padding:8,border:'1px solid #ccc',borderRadius:6,
+                          whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',
+                          ...style
+                        }}
+                      >
+                        {reservedBy || 'Szabad'}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
           </div>
         </>
       )}
