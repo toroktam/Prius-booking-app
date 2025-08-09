@@ -1,6 +1,6 @@
-// pages/index.js
 import { useEffect, useState } from 'react';
-import { addDays, format, startOfWeek } from 'date-fns';
+import { GoogleSpreadsheet } from 'google-spreadsheet';
+import { format, addDays, startOfWeek } from 'date-fns';
 import { hu } from 'date-fns/locale';
 
 const TIME_SLOTS = [
@@ -11,192 +11,177 @@ const TIME_SLOTS = [
   '20:00–21:40',
 ];
 
+const SHEET_ID = '14OnABoY-pzyAW-oXGHBxLxYsCu9Q3JtNDmNIqb530gI';
+const ACCESS_PASSWORD = 'tanulas123';
+
 export default function FoglalasiNaptar() {
   const [user, setUser] = useState('');
   const [loggedIn, setLoggedIn] = useState(false);
   const [bookings, setBookings] = useState({});
-  const [weekStart, setWeekStart] = useState(startOfWeek(new Date(), { weekStartsOn: 1 }));
+  const [access, setAccess] = useState(false);
+  const [password, setPassword] = useState('');
+  const [currentWeekStart, setCurrentWeekStart] = useState(startOfWeek(new Date(), { weekStartsOn: 1 }));
 
-  // Lekéri a foglalásokat a szerveroldali API-ból
-  const fetchBookings = async () => {
-    try {
-      const res = await fetch('/api/bookings');
-      if (!res.ok) throw new Error('Hiba a foglalások lekérésekor');
-      const data = await res.json();
-      setBookings(data || {});
-    } catch (err) {
-      console.error(err);
+  const DAYS = Array.from({ length: 7 }, (_, i) =>
+    addDays(currentWeekStart, i)
+  );
+
+  useEffect(() => {
+    const storedAccess = localStorage.getItem('access_granted');
+    if (storedAccess === 'true') {
+      setAccess(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    const fetchBookings = async () => {
+      const doc = new GoogleSpreadsheet(SHEET_ID);
+      await doc.useServiceAccountAuth({
+        client_email: process.env.NEXT_PUBLIC_GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+        private_key: (process.env.NEXT_PUBLIC_GOOGLE_PRIVATE_KEY || process.env.GOOGLE_PRIVATE_KEY).replace(/\\n/g, '\n'),
+      });
+      await doc.loadInfo();
+      const sheet = doc.sheetsByIndex[0];
+      const rows = await sheet.getRows();
+      const newBookings = {};
+      rows.forEach(row => {
+        const key = `${row.Nap}-${row.Idosav}`;
+        newBookings[key] = row.Foglalo;
+      });
+      setBookings(newBookings);
+    };
+    if (loggedIn && access) fetchBookings();
+  }, [loggedIn, access, currentWeekStart]);
+
+  const handlePasswordSubmit = (e) => {
+    e.preventDefault();
+    if (password === ACCESS_PASSWORD) {
+      setAccess(true);
+      localStorage.setItem('access_granted', 'true');
+    } else {
+      alert('Hibás jelszó');
     }
   };
 
-  useEffect(() => {
-    if (loggedIn) fetchBookings();
-  }, [loggedIn, weekStart]);
+  const handleLogin = (e) => {
+    e.preventDefault();
+    if (user.trim()) setLoggedIn(true);
+  };
 
-  const handleBooking = async (date, slot) => {
-    const key = `${date}-${slot}`;
-    const reservedBy = bookings[key];
+  const handleBooking = async (day, slot) => {
+    const key = `${format(day, 'yyyy-MM-dd')}-${slot}`;
+    const current = bookings[key];
+    const doc = new GoogleSpreadsheet(SHEET_ID);
+    await doc.useServiceAccountAuth({
+      client_email: process.env.NEXT_PUBLIC_GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      private_key: (process.env.NEXT_PUBLIC_GOOGLE_PRIVATE_KEY || process.env.GOOGLE_PRIVATE_KEY).replace(/\\n/g, '\n'),
+    });
+    await doc.loadInfo();
+    const sheet = doc.sheetsByIndex[0];
 
-    if (reservedBy === user) {
-      // saját törlése
-      await fetch('/api/bookings', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date, slot, user }),
-      });
-      const copy = { ...bookings };
-      delete copy[key];
-      setBookings(copy);
-      return;
-    }
-
-    if (!reservedBy) {
-      // új foglalás
-      await fetch('/api/bookings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date, slot, user }),
+    if (current === user) {
+      const rows = await sheet.getRows();
+      const match = rows.find(row => row.Nap === format(day, 'yyyy-MM-dd') && row.Idosav === slot && row.Foglalo === user);
+      if (match) {
+        await match.delete();
+        const updated = { ...bookings };
+        delete updated[key];
+        setBookings(updated);
+      }
+    } else if (!current) {
+      await sheet.addRow({
+        Nap: format(day, 'yyyy-MM-dd'),
+        Idosav: slot,
+        Foglalo: user,
+        Idobelyeg: new Date().toISOString()
       });
       setBookings({ ...bookings, [key]: user });
     }
   };
 
-  const days = Array.from({ length: 7 }).map((_, i) => addDays(weekStart, i));
+  const goPrevWeek = () => {
+    setCurrentWeekStart(prev => addDays(prev, -7));
+  };
+
+  const goNextWeek = () => {
+    setCurrentWeekStart(prev => addDays(prev, 7));
+  };
+
+  if (!access) {
+    return (
+      <div className="p-4">
+        <form onSubmit={handlePasswordSubmit} className="space-x-2">
+          <input
+            type="password"
+            placeholder="Jelszó belépéshez"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="border px-2 py-1"
+          />
+          <button type="submit" className="bg-blue-500 text-white px-3 py-1 rounded">
+            Belépés
+          </button>
+        </form>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ padding: 12, fontFamily: 'Arial, sans-serif' }}>
+    <div className="p-4">
       {!loggedIn ? (
-        <form
-          onSubmit={(e) => { e.preventDefault(); if (user.trim()) setLoggedIn(true); }}
-          style={{ marginBottom: 12 }}
-        >
+        <form onSubmit={handleLogin} className="space-x-2">
           <input
             type="text"
             placeholder="Név (pl. Tamás vagy Krisztián)"
             value={user}
             onChange={(e) => setUser(e.target.value)}
-            style={{ padding: 8, marginRight: 8 }}
+            className="border px-2 py-1"
           />
-          <button type="submit" style={{ padding: '8px 12px' }}>Belépés</button>
+          <button type="submit" className="bg-blue-500 text-white px-3 py-1 rounded">
+            Belépés
+          </button>
         </form>
       ) : (
         <>
-          <h2 style={{ margin: '6px 0 12px 0' }}>
-            Üdv, {user}! ({format(weekStart, 'yyyy. MMM dd', { locale: hu })} - {format(addDays(weekStart, 6), 'MMM dd', { locale: hu })})
-          </h2>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-            <button onClick={() => setWeekStart(addDays(weekStart, -7))} style={{ padding: '6px 10px' }}>◀ Előző hét</button>
-            <button onClick={() => setWeekStart(addDays(weekStart, 7))} style={{ padding: '6px 10px' }}>Következő hét ▶</button>
+          <div className="flex justify-between mb-4">
+            <button onClick={goPrevWeek} className="bg-gray-300 px-2 py-1 rounded">Előző hét</button>
+            <h2 className="text-xl">Üdv, {user}!</h2>
+            <button onClick={goNextWeek} className="bg-gray-300 px-2 py-1 rounded">Következő hét</button>
           </div>
-
-          <div className="calendar-wrapper">
-            <div className="calendar-grid">
-              <div className="header-cell">Idősáv</div>
-              {days.map((d) => (
-                <div key={d.toISOString()} className="header-cell">
-                  {format(d, 'EEE dd.MM.', { locale: hu })}
-                </div>
-              ))}
-
-              {TIME_SLOTS.map((slot) => (
-                <div key={slot} className="slot-cell">{slot}</div>
-              )).reduce((acc, slotCell, rowIndex) => {
-                // az előző map csak az első oszlopot adta; most sorrendben hozzáadjuk a napokra a gombokat
-                acc.push(slotCell);
-                return acc;
-              }, []).concat(
-                // másik megközelítés: egyszerűbb — újra felépítjük a sorokat:
-                []
-              )}
-
-              {/* Keresztbe építjük fel: minden idősáv után 7 nap */}
-              {TIME_SLOTS.map((slot) => (
-                // fragment a slot cell és a 7 nap gombjai helyett (slot cell már fent van), itt a nap cellák
-                <span key={`row-${slot}`} style={{ display: 'contents' }}>
-                  {/* a slot cím már fent van; most a napok gombjai */}
-                  {days.map((day) => {
-                    const dateStr = format(day, 'yyyy-MM-dd');
-                    const key = `${dateStr}-${slot}`;
-                    const reservedBy = bookings[key];
-                    const isMine = reservedBy === user;
-                    const btnClass = reservedBy ? (isMine ? 'slot-btn own' : 'slot-btn booked') : 'slot-btn free';
-                    return (
-                      <button
-                        key={key}
-                        className={btnClass}
-                        onClick={() => handleBooking(dateStr, slot)}
-                        disabled={!!reservedBy && !isMine}
-                        aria-label={`${format(day, 'EEE dd.MM.', { locale: hu })} ${slot} — ${reservedBy || 'Szabad'}`}
-                      >
-                        {reservedBy || 'Szabad'}
-                      </button>
-                    );
-                  })}
-                </span>
-              ))}
-            </div>
+          <div className="grid grid-cols-8 gap-1">
+            <div className="font-bold">Idősáv</div>
+            {DAYS.map(day => (
+              <div key={day} className="font-bold text-center">
+                {format(day, 'MM.dd', { locale: hu })} <br /> {format(day, 'EEEE', { locale: hu })}
+              </div>
+            ))}
+            {TIME_SLOTS.map((slot) => (
+              <>
+                <div className="font-semibold">{slot}</div>
+                {DAYS.map(day => {
+                  const key = `${format(day, 'yyyy-MM-dd')}-${slot}`;
+                  const reservedBy = bookings[key];
+                  const isMine = reservedBy === user;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => handleBooking(day, slot)}
+                      className={`h-12 w-full border text-sm rounded ${
+                        reservedBy
+                          ? isMine
+                            ? 'bg-green-300 hover:bg-yellow-200'
+                            : 'bg-red-400 text-white cursor-not-allowed'
+                          : 'bg-white hover:bg-blue-100'
+                      }`}
+                      disabled={reservedBy && !isMine}
+                    >
+                      {reservedBy || 'Szabad'}
+                    </button>
+                  );
+                })}
+              </>
+            ))}
           </div>
-
-          <style jsx>{`
-            .calendar-wrapper {
-              overflow-x: auto;
-              -webkit-overflow-scrolling: touch;
-            }
-            .calendar-grid {
-              display: grid;
-              grid-template-columns: 160px repeat(7, minmax(120px, 1fr));
-              gap: 8px;
-              align-items: start;
-              min-width: 640px; /* ha túl kicsi a képernyő, görgethetővé teszi */
-            }
-            .header-cell {
-              font-weight: 700;
-              text-align: center;
-              padding: 6px 4px;
-              background: #f5f5f5;
-              border-radius: 6px;
-            }
-            .slot-cell {
-              padding: 8px 6px;
-              font-weight: 600;
-            }
-            .slot-btn {
-              display: block;
-              width: 100%;
-              padding: 8px;
-              border: 1px solid #ccc;
-              border-radius: 6px;
-              background: white;
-              white-space: nowrap;
-              overflow: hidden;
-              text-overflow: ellipsis;
-            }
-            .slot-btn.free:hover {
-              background: #e8f2ff;
-              cursor: pointer;
-            }
-            .slot-btn.own {
-              background: #c8f7c8;
-            }
-            .slot-btn.booked {
-              background: #f36b6b;
-              color: white;
-            }
-
-            /* Mobilon kicsit kisebb gombok */
-            @media (max-width: 640px) {
-              .calendar-grid {
-                grid-template-columns: 120px repeat(7, 120px);
-                min-width: auto;
-              }
-              .slot-btn {
-                padding: 6px;
-                font-size: 13px;
-              }
-              .header-cell { font-size: 13px; }
-            }
-          `}</style>
         </>
       )}
     </div>
