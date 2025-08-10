@@ -111,11 +111,16 @@ export default function Home() {
 
   return (
     <div style={{ padding: 12, fontFamily: 'Arial, sans-serif' }}>
-      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
-        <button onClick={() => setWeekStart((w) => addDays(w, -7))} style={{ marginRight: 8 }}>◀ Előző hét</button>
-        <h2 style={{ margin: 0, lineHeight: '32px' }}>Üdv, {name}!</h2>
-        <button onClick={() => setWeekStart((w) => addDays(w, 7))} style={{ marginLeft: 8 }}>Következő hét ▶</button>
-      </div>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: 12, gap: 8 }}>
+  <button onClick={() => setWeekStart((w) => addDays(w, -7))}>◀ Előző hét</button>
+  <h2 style={{ margin: 0 }}>Üdv, {name}!</h2>
+  <button onClick={() => setWeekStart((w) => addDays(w, 7))}>Következő hét ▶</button>
+  <button onClick={() => {
+    localStorage.removeItem('bookingName');
+    setLoggedIn(false);
+    setName('');
+  }} style={{ background: '#eee', padding: '4px 8px' }}>Kijelentkezés</button>
+</div>
 
       <div style={{ overflowX: 'auto' }}>
         <div style={{
