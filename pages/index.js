@@ -28,7 +28,6 @@ export default function Home() {
 
   useEffect(() => {
     if (loggedIn) fetchBookings();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loggedIn, weekStart]);
 
   async function fetchBookings() {
@@ -48,21 +47,15 @@ export default function Home() {
     const reservedBy = bookings[key];
 
     if (reservedBy === name) {
-      // törlés
       const res = await fetch('/api/updateBooking', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date: dateStr, slot, user: name })
       });
       if (res.ok) {
-        // Helyi frissítés, majd a háttérben frissítjük a szerverről
         const copy = { ...bookings };
         delete copy[key];
         setBookings(copy);
-        setTimeout(() => fetchBookings(), 1500); // Késleltetett frissítés
-      } else {
-        alert('Törlés sikertelen');
-        fetchBookings();
       }
       return;
     }
@@ -74,15 +67,12 @@ export default function Home() {
         body: JSON.stringify({ date: dateStr, slot, user: name })
       });
       if (res.ok) {
-        // Helyi frissítés, majd a háttérben frissítjük a szerverről
         setBookings({ ...bookings, [key]: name });
-        setTimeout(() => fetchBookings(), 1500); // Késleltetett frissítés
       } else if (res.status === 409) {
         alert('Az időpontot már foglalták');
         fetchBookings();
       } else {
         alert('Foglalás sikertelen');
-        fetchBookings();
       }
     }
   }
@@ -91,22 +81,27 @@ export default function Home() {
 
   if (!loggedIn) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ textAlign: 'center' }}>
-          <h2>Kérlek add meg a neved</h2>
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <h2 className="mb-2 text-lg font-bold">Kérlek add meg a neved</h2>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Add meg a neved"
-            style={{ padding: '8px', width: '220px', marginRight: 8 }}
+            className="border px-3 py-2 rounded w-64"
           />
-          <div style={{ marginTop: 8 }}>
-            <button onClick={() => {
-              if (name.trim()) {
-                localStorage.setItem('bookingName', name.trim());
-                setLoggedIn(true);
-              }
-            }} style={{ padding: '8px 12px' }}>Belépés</button>
+          <div className="mt-3">
+            <button
+              onClick={() => {
+                if (name.trim()) {
+                  localStorage.setItem('bookingName', name.trim());
+                  setLoggedIn(true);
+                }
+              }}
+              className="px-4 py-2 bg-blue-500 text-white rounded"
+            >
+              Belépés
+            </button>
           </div>
         </div>
       </div>
@@ -114,58 +109,60 @@ export default function Home() {
   }
 
   return (
-    <div style={{ padding: 12, fontFamily: 'Arial, sans-serif' }}>
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: 12, gap: 8 }}>
-        <button onClick={() => setWeekStart((w) => addDays(w, -7))}>◀ Előző hét</button>
-        <h2 style={{ margin: 0 }}>Üdv, {name}!</h2>
-        <button onClick={() => setWeekStart((w) => addDays(w, 7))}>Következő hét ▶</button>
-        <button onClick={() => {
-          localStorage.removeItem('bookingName');
-          setLoggedIn(false);
-          setName('');
-        }} style={{ background: '#eee', padding: '4px 8px' }}>Kijelentkezés</button>
+    <div className="p-4 font-sans">
+      <div className="flex flex-wrap justify-center items-center mb-4 gap-2">
+        <button onClick={() => setWeekStart(addDays(weekStart, -7))}>◀ Előző hét</button>
+        <h2 className="m-0 font-bold">Üdv, {name}!</h2>
+        <button onClick={() => setWeekStart(addDays(weekStart, 7))}>Következő hét ▶</button>
+        <button
+          onClick={() => {
+            localStorage.removeItem('bookingName');
+            setLoggedIn(false);
+            setName('');
+          }}
+          className="px-2 py-1 bg-gray-300 rounded"
+        >
+          Kijelentkezés
+        </button>
       </div>
 
-      <div style={{ overflowX: 'auto' }}>
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: '160px repeat(7, minmax(120px, 1fr))',
-          gap: 8,
-          alignItems: 'start',
-          minWidth: 640
-        }}>
-          <div style={{ fontWeight: 700, textAlign: 'center', padding: 6, background: '#f5f5f5', borderRadius: 6 }}>Idősáv</div>
+      <div className="overflow-x-auto">
+        <div
+          className="grid gap-1"
+          style={{
+            gridTemplateColumns: `120px repeat(7, minmax(100px, 1fr))`,
+          }}
+        >
+          <div className="font-bold text-center bg-gray-100 p-2 rounded">Idősáv</div>
           {days.map(d => (
-            <div key={d.toISOString()} style={{ fontWeight: 700, textAlign: 'center', padding: 6, background: '#f5f5f5', borderRadius: 6 }}>
-              {format(d, 'MM.dd', { locale: hu })}<br /><small>{format(d, 'EEEE', { locale: hu })}</small>
+            <div key={d.toISOString()} className="font-bold text-center bg-gray-100 p-2 rounded">
+              {format(d, 'MM.dd', { locale: hu })}
+              <br />
+              <small>{format(d, 'EEEE', { locale: hu })}</small>
             </div>
           ))}
 
           {TIME_SLOTS.map(slot => (
-            <div key={slot} style={{ display: 'contents' }}>
-              <div style={{ padding: 8, background: '#fafafa', fontWeight: 600 }}>{slot}</div>
+            <div key={slot} className="contents">
+              <div className="p-2 font-semibold bg-gray-50">{slot}</div>
               {days.map(d => {
                 const dateStr = format(d, 'yyyy-MM-dd');
                 const key = `${dateStr}-${slot}`;
                 const reservedBy = bookings[key];
                 const isMine = reservedBy === name;
-                const style = reservedBy ? (isMine ? { background: '#ffd97d' } : { background: '#f36b6b', color: 'white' }) : { background: '#dff7d8' };
+
                 return (
                   <button
                     key={key}
                     onClick={() => handleClick(dateStr, slot)}
                     disabled={!!reservedBy && !isMine}
-                    style={{
-                      width: '100%',
-                      padding: 8,
-                      border: '1px solid #ccc',
-                      borderRadius: 6,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      cursor: (!!reservedBy && !isMine) ? 'not-allowed' : 'pointer',
-                      ...style
-                    }}
+                    className={`p-2 border rounded text-sm whitespace-nowrap overflow-hidden text-ellipsis ${
+                      reservedBy
+                        ? isMine
+                          ? 'bg-yellow-200'
+                          : 'bg-red-400 text-white cursor-not-allowed'
+                        : 'bg-green-100 hover:bg-green-200'
+                    }`}
                   >
                     {reservedBy || 'Szabad'}
                   </button>
@@ -175,7 +172,8 @@ export default function Home() {
           ))}
         </div>
       </div>
-      {loading && <p>Betöltés...</p>}
+
+      {loading && <p className="mt-4 text-center">Betöltés...</p>}
     </div>
   );
 }
