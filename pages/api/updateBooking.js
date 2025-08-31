@@ -1,57 +1,46 @@
 // pages/api/updateBooking.js
 import { GoogleSpreadsheet } from 'google-spreadsheet';
-
-async function getSheet() {
-  const doc = new GoogleSpreadsheet(process.env.SHEET_ID);
-  await doc.useServiceAccountAuth(JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY));
-  await doc.loadInfo();
-  return doc.sheetsByIndex[0];
-}
+import { JWT } from 'google-auth-library';
 
 export default async function handler(req, res) {
   try {
-    const sheet = await getSheet();
-    const rows = await sheet.getRows();
+    const doc = new GoogleSpreadsheet(process.env.SHEET_ID);
+
+    const serviceAccountAuth = new JWT({
+      email: process.env.GOOGLE_CLIENT_EMAIL,
+      key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+
+    await doc.useServiceAccountAuth(serviceAccountAuth);
+    await doc.loadInfo();
+    const sheet = doc.sheetsByIndex[0];
 
     if (req.method === 'POST') {
       const { date, slot, user } = req.body;
-      if (!date || !slot || !user) {
-        return res.status(400).json({ error: 'Missing fields' });
-      }
-
-      const exists = rows.find(r => r.Nap === date && r.Idosav === slot);
-      if (exists) {
-        return res.status(409).json({ error: 'Slot already taken' });
-      }
-
       await sheet.addRow({
-        Nap: date,
+        Datum: date,
         Idosav: slot,
         Foglalo: user,
-        Idobelyeg: new Date().toISOString()
+        Idobelyeg: new Date().toISOString(),
       });
-      return res.status(200).json({ message: 'Booking successful' });
+      return res.status(200).json({ success: true });
     }
 
     if (req.method === 'DELETE') {
       const { date, slot, user } = req.body;
-      if (!date || !slot || !user) {
-        return res.status(400).json({ error: 'Missing fields' });
+      const rows = await sheet.getRows();
+      const match = rows.find(r => r.Datum === date && r.Idosav === slot && r.Foglalo === user);
+      if (match) {
+        await match.delete();
+        return res.status(200).json({ success: true });
       }
-
-      const rowToDelete = rows.find(r => r.Nap === date && r.Idosav === slot && r.Foglalo === user);
-      if (!rowToDelete) {
-        return res.status(404).json({ error: 'Booking not found or not owned by user' });
-      }
-
-      await rowToDelete.delete();
-      return res.status(200).json({ message: 'Booking deleted' });
+      return res.status(404).json({ error: 'Foglalás nem található' });
     }
 
-    return res.status(405).end();
-
+    res.status(405).json({ error: 'Nem támogatott metódus' });
   } catch (error) {
-    console.error('API Error:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
+    console.error('updateBooking error:', error);
+    res.status(500).json({ error: 'Hiba történt a foglalás módosításakor' });
   }
 }
