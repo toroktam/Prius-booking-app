@@ -55,9 +55,8 @@ export default function Home() {
         body: JSON.stringify({ date: dateStr, slot, user: name })
       });
       if (res.ok) {
-        const copy = { ...bookings };
-        delete copy[key];
-        setBookings(copy);
+        // Frissítsük az adatokat a szerverről
+        fetchBookings();
       } else {
         alert('Törlés sikertelen');
         fetchBookings();
@@ -72,7 +71,8 @@ export default function Home() {
         body: JSON.stringify({ date: dateStr, slot, user: name })
       });
       if (res.ok) {
-        setBookings({ ...bookings, [key]: name });
+        // Frissítsük az adatokat a szerverről
+        fetchBookings();
       } else if (res.status === 409) {
         alert('Az időpontot már foglalták');
         fetchBookings();
